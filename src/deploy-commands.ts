@@ -2,8 +2,9 @@ import { REST, Routes } from 'discord.js';
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 import * as checkNicknames from './commands/checkNicknames';
+import * as timesPanel from './commands/timesPanel';
 
-const commands = [checkNicknames.data.toJSON()];
+const commands = [checkNicknames.data.toJSON(), timesPanel.data.toJSON()];
 
 const rest = new REST().setToken(process.env.DISCORD_TOKEN!);
 
