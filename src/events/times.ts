@@ -59,9 +59,15 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
   const userId = interaction.user.id;
   const categoryId = process.env.DISCORD_TIMES_CATEGORY_ID!;
 
+  const rawName = interaction.fields.getTextInputValue(NAME_INPUT_ID);
+  console.log(
+    `[times] create requested by ${interaction.user.tag} (${userId}) input="${rawName}"`
+  );
+
   // 1. チャンネル名を整形・検証
-  const slug = toSlug(interaction.fields.getTextInputValue(NAME_INPUT_ID));
+  const slug = toSlug(rawName);
   if (!slug) {
+    console.log(`[times] rejected (invalid name) by ${interaction.user.tag} (${userId})`);
     await interaction.editReply(
       '使用できる文字が含まれていません。英数字・ひらがな・カタカナ・漢字で名前を指定してください。'
     );
@@ -78,6 +84,9 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
       ch.topic?.includes(ownerMarker(userId)) === true
   );
   if (existing) {
+    console.log(
+      `[times] rejected (already has ${existing.name}) by ${interaction.user.tag} (${userId})`
+    );
     await interaction.editReply(
       `あなたは既に <#${existing.id}> を作成済みです。times チャンネルは一人一つまでです。`
     );
@@ -99,6 +108,10 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
       ],
     });
 
+    console.log(
+      `[times] created #${channel.name} (${channel.id}) by ${interaction.user.tag} (${userId})`
+    );
+
     await interaction.editReply(`チャンネルを作成しました： <#${channel.id}>`);
     // 作成の告知は全員に見えるよう、返信ではなく通常メッセージとして投稿する
     if (interaction.channel?.isTextBased() && 'send' in interaction.channel) {
@@ -107,7 +120,10 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
       );
     }
   } catch (err) {
-    console.error(err);
+    console.error(
+      `[times] failed for ${interaction.user.tag} (${userId}):`,
+      err
+    );
     await interaction.editReply(
       'チャンネルの作成に失敗しました。Bot の権限やカテゴリ設定を確認してください。'
     );
