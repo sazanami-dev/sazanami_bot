@@ -36,6 +36,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await ticket.handleClose(interaction).catch(console.error);
       return;
     }
+    if (interaction.customId === ticket.TICKET_REOPEN_ID) {
+      await ticket.handleReopen(interaction).catch(console.error);
+      return;
+    }
     return;
   }
   if (interaction.isModalSubmit()) {
