@@ -5,6 +5,7 @@ import { client } from './clients/discord';
 import * as checkNicknames from './commands/checkNicknames';
 import * as timesPanel from './commands/timesPanel';
 import * as ticketPanel from './commands/ticketPanel';
+import * as ticketCreate from './commands/ticketCreate';
 import * as times from './events/times';
 import * as ticket from './events/ticket';
 import * as guildMemberAdd from './events/guildMemberAdd';
@@ -14,6 +15,7 @@ const commands = new Map([
   [checkNicknames.data.name, checkNicknames],
   [timesPanel.data.name, timesPanel],
   [ticketPanel.data.name, ticketPanel],
+  [ticketCreate.data.name, ticketCreate],
 ]);
 
 client.on(guildMemberAdd.name, guildMemberAdd.execute);
@@ -49,6 +51,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.customId === ticket.TICKET_MODAL_ID) {
       await ticket.handleModal(interaction).catch(console.error);
+      return;
+    }
+    if (interaction.customId.startsWith(ticket.TICKET_STAFF_MODAL_PREFIX)) {
+      await ticket.handleStaffCreateModal(interaction).catch(console.error);
     }
     return;
   }
