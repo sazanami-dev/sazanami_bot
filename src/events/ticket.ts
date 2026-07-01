@@ -5,6 +5,7 @@ import {
   ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  Guild,
   GuildMember,
   Message,
   ModalBuilder,
@@ -14,6 +15,7 @@ import {
   TextChannel,
   TextInputBuilder,
   TextInputStyle,
+  User,
 } from 'discord.js';
 import { client } from '../clients/discord';
 
@@ -22,6 +24,8 @@ export const TICKET_BUTTON_ID = 'ticket:open';
 export const TICKET_MODAL_ID = 'ticket:submit';
 export const TICKET_CLOSE_ID = 'ticket:close';
 export const TICKET_REOPEN_ID = 'ticket:reopen';
+// 運営が /ticket-create で出すモーダル（customId に対象ユーザーIDを付与する）
+export const TICKET_STAFF_MODAL_PREFIX = 'ticket:staffcreate:';
 const SUBJECT_INPUT_ID = 'subject';
 
 // 閉鎖後、削除するまでの猶予期間（1週間）
@@ -61,13 +65,34 @@ function buildClosedEmbed(at: number): EmbedBuilder {
     .setFooter({ text: `${CLOSED_MARKER_PREFIX}${at}` });
 }
 
+// 閉鎖時刻を持つ埋め込みかどうか
+function isClosedEmbed(embed: { footer?: { text?: string } | null }): boolean {
+  return embed.footer?.text?.startsWith(CLOSED_MARKER_PREFIX) ?? false;
+}
+
+// チケットの案内（操作方法）を表示する埋め込み。用件は別途テキストで送る。
+function buildInfoEmbed(initiatedByStaff: boolean): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(
+      initiatedByStaff
+        ? '📩 運営チームからのご連絡'
+        : '📩 運営チームへのお問い合わせ'
+    )
+    .setDescription(
+      'このチャンネルで運営チームとやり取りできます。\n' +
+        '解決しましたら、運営チームが下のボタンからチケットを閉じてください。'
+    )
+    .setFooter({ text: '閉鎖から1週間後に自動的に削除されます' });
+}
+
 // Discord のチャンネル名に使える形に整形する
 function toSlug(raw: string): string {
   return raw
     .normalize('NFKC')
     .trim()
     .toLowerCase()
-    .replace(/[\s　]+/g, '-')
+    .replace(/[\s　]+/g, '')
     .replace(/[^0-9a-z\-_ぁ-んァ-ヶー一-龠々]/gu, '')
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
@@ -123,19 +148,22 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
   await interaction.showModal(modal);
 }
 
-// モーダルが送信されたらチケットチャンネルを作成する
-export async function handleModal(interaction: ModalSubmitInteraction): Promise<void> {
-  await interaction.deferReply({ ephemeral: true });
+// チケットチャンネルを作成する共通処理。
+// パネル経由（相談者自身）でも、運営のスラッシュコマンド経由でも使う。
+type CreateTicketResult =
+  | { status: 'created'; channel: TextChannel }
+  | { status: 'exists'; channel: TextChannel }
+  | { status: 'error' };
 
-  const guild = interaction.guild!;
-  const userId = interaction.user.id;
+export async function createTicketChannel(
+  guild: Guild,
+  owner: User,
+  subject: string,
+  initiatedByStaff: boolean
+): Promise<CreateTicketResult> {
+  const userId = owner.id;
   const categoryId = process.env.DISCORD_TICKET_CATEGORY_ID!;
   const staffRoleId = process.env.DISCORD_STAFF_ROLE_ID;
-
-  const subject = interaction.fields.getTextInputValue(SUBJECT_INPUT_ID);
-  console.log(
-    `[ticket] create requested by ${interaction.user.tag} (${userId})`
-  );
 
   // 1. 既に開いているチケットがないか確認（一人一つまで）。
   //    閉鎖状態はピン留めメッセージの埋め込みで判定する（topic は所有者のみ保持）。
@@ -151,18 +179,15 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
     const isOpen =
       !pinned || ![...pinned.values()].some((m) => parseClosedAt(m) !== null);
     if (isOpen) {
-      console.log(
-        `[ticket] rejected (already has ${ch.name}) by ${interaction.user.tag} (${userId})`
-      );
-      await interaction.editReply(
-        `あなたは既に <#${ch.id}> でお問い合わせ中です。新しく作成する前に、そちらでご相談ください。`
-      );
-      return;
+      return { status: 'exists', channel: ch };
     }
   }
 
   // 2. チャンネルを作成（相談者と運営ロールのみ閲覧可能な非公開チャンネル）
-  const slug = toSlug(interaction.user.username) || userId;
+  //    チャンネル名にはサーバーでの表示名（ニックネーム）を使う。
+  const member = await guild.members.fetch(userId).catch(() => null);
+  const displayName = member?.displayName ?? owner.username;
+  const slug = toSlug(displayName) || userId;
   const channelName = `ticket-${slug}`;
 
   try {
@@ -201,30 +226,110 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
     });
 
     console.log(
-      `[ticket] created #${channel.name} (${channel.id}) by ${interaction.user.tag} (${userId})`
+      `[ticket] created #${channel.name} (${channel.id}) for ${owner.tag} (${userId})` +
+        (initiatedByStaff ? ' [staff-initiated]' : '')
     );
 
-    // 3. チャンネル内に案内と「閉じる」ボタンを投稿し、ピン留めする。
+    // 3. チャンネル内に案内（埋め込み）と「閉じる」ボタンを投稿し、ピン留めする。
     //    このメッセージが開閉状態・閉鎖時刻の保存先になるため、自動削除処理が
     //    ピン留めメッセージから確実に見つけられるようにする。
+    //    本文（content）は通知用に対象者と運営をメンションするだけにし、
+    //    用件は埋め込みで見やすく表示する。
+    //    案内は埋め込みで表示し、用件のみ通常テキスト（content）で送る。
     const mention = staffRoleId ? `<@&${staffRoleId}>` : '運営チーム';
+    const label = initiatedByStaff ? '用件' : '相談内容';
     const intro = await channel.send({
-      content:
-        `${interaction.user} さんからのお問い合わせです（${mention}）。\n\n` +
-        `**相談内容**\n${subject}\n\n` +
-        '解決しましたら、運営チームが下のボタンからチケットを閉じてください。\n' +
-        '閉じてから1週間後にこのチャンネルは自動的に削除されます。',
+      content: `<@${userId}> さん / ${mention}\n\n## ${label}\n${subject}`,
+      embeds: [buildInfoEmbed(initiatedByStaff)],
       components: [buildCloseRow()],
     });
     await intro.pin().catch((err) => console.error('[ticket] failed to pin intro:', err));
 
-    await interaction.editReply(
-      `お問い合わせチャンネルを作成しました： <#${channel.id}>\nこちらで運営チームとやり取りができます。`
-    );
+    return { status: 'created', channel };
   } catch (err) {
-    console.error(`[ticket] failed for ${interaction.user.tag} (${userId}):`, err);
+    console.error(`[ticket] failed for ${owner.tag} (${userId}):`, err);
+    return { status: 'error' };
+  }
+}
+
+// モーダルが送信されたら相談者自身のチケットチャンネルを作成する
+export async function handleModal(interaction: ModalSubmitInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const subject = interaction.fields.getTextInputValue(SUBJECT_INPUT_ID);
+  console.log(`[ticket] create requested by ${interaction.user.tag} (${interaction.user.id})`);
+
+  const result = await createTicketChannel(
+    interaction.guild!,
+    interaction.user,
+    subject,
+    false
+  );
+
+  if (result.status === 'exists') {
+    await interaction.editReply(
+      `あなたは既に <#${result.channel.id}> でお問い合わせ中です。新しく作成する前に、そちらでご相談ください。`
+    );
+  } else if (result.status === 'created') {
+    await interaction.editReply(
+      `お問い合わせチャンネルを作成しました： <#${result.channel.id}>\nこちらで運営チームとやり取りができます。`
+    );
+  } else {
     await interaction.editReply(
       'チケットの作成に失敗しました。お手数ですが運営チームまで直接ご連絡ください。'
+    );
+  }
+}
+
+// /ticket-create 用のモーダルを組み立てる（対象ユーザーIDを customId に埋め込む）
+export function buildStaffCreateModal(targetUserId: string): ModalBuilder {
+  const subjectInput = new TextInputBuilder()
+    .setCustomId(SUBJECT_INPUT_ID)
+    .setLabel('用件')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(500)
+    .setPlaceholder('対象ユーザーに伝える内容を入力してください');
+
+  return new ModalBuilder()
+    .setCustomId(`${TICKET_STAFF_MODAL_PREFIX}${targetUserId}`)
+    .setTitle('チケットを作成')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(subjectInput)
+    );
+}
+
+// /ticket-create のモーダルが送信されたら、対象ユーザー宛にチケットを作成する
+export async function handleStaffCreateModal(
+  interaction: ModalSubmitInteraction
+): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetId = interaction.customId.slice(TICKET_STAFF_MODAL_PREFIX.length);
+  const subject = interaction.fields.getTextInputValue(SUBJECT_INPUT_ID);
+  const target = await interaction.client.users.fetch(targetId).catch(() => null);
+  if (!target) {
+    await interaction.editReply('対象ユーザーが見つかりませんでした。');
+    return;
+  }
+
+  console.log(
+    `[ticket] create requested by ${interaction.user.tag} for ${target.tag} (${targetId})`
+  );
+
+  const result = await createTicketChannel(interaction.guild!, target, subject, true);
+
+  if (result.status === 'exists') {
+    await interaction.editReply(
+      `${target} さんには既に開いているチケットがあります： <#${result.channel.id}>`
+    );
+  } else if (result.status === 'created') {
+    await interaction.editReply(
+      `${target} さん宛のチケットを作成しました： <#${result.channel.id}>`
+    );
+  } else {
+    await interaction.editReply(
+      'チケットの作成に失敗しました。Bot の権限やカテゴリ設定を確認してください。'
     );
   }
 }
@@ -268,8 +373,15 @@ export async function handleClose(interaction: ButtonInteraction): Promise<void>
 
   // 2. 閉じるボタンを「開く」ボタンに差し替え、閉鎖時刻を埋め込みに記録する。
   //    （topic は更新回数の制限が厳しいため使わない）
+  //    案内の埋め込みは残し、閉鎖を示す埋め込みを追加する。
+  const keepEmbeds = interaction.message.embeds
+    .filter((e) => !isClosedEmbed(e))
+    .map((e) => EmbedBuilder.from(e));
   await interaction.message
-    .edit({ components: [buildReopenRow()], embeds: [buildClosedEmbed(now)] })
+    .edit({
+      components: [buildReopenRow()],
+      embeds: [...keepEmbeds, buildClosedEmbed(now)],
+    })
     .catch((err) => console.error('[ticket] failed to update intro message:', err));
 
   const deleteDate = new Date(now + DELETE_AFTER_MS);
@@ -320,10 +432,13 @@ export async function handleReopen(interaction: ButtonInteraction): Promise<void
       .catch((err) => console.error('[ticket] failed to restore owner perms:', err));
   }
 
-  // 2. 「開く」ボタンを「閉じる」ボタンに戻し、閉鎖時刻の埋め込みを消す
-  //    （これで自動削除の対象から外れる）
+  // 2. 「開く」ボタンを「閉じる」ボタンに戻し、閉鎖を示す埋め込みだけを消す
+  //    （案内の埋め込みは残す。これで自動削除の対象から外れる）
+  const keepEmbeds = interaction.message.embeds
+    .filter((e) => !isClosedEmbed(e))
+    .map((e) => EmbedBuilder.from(e));
   await interaction.message
-    .edit({ components: [buildCloseRow()], embeds: [] })
+    .edit({ components: [buildCloseRow()], embeds: keepEmbeds })
     .catch((err) => console.error('[ticket] failed to update intro message:', err));
 
   await channel.send(`🔓 ${interaction.user} がこのチケットを再開しました。`);

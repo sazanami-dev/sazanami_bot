@@ -4,11 +4,13 @@ dotenv.config({ path: '.env.local' });
 import * as checkNicknames from './commands/checkNicknames';
 import * as timesPanel from './commands/timesPanel';
 import * as ticketPanel from './commands/ticketPanel';
+import * as ticketCreate from './commands/ticketCreate';
 
 const commands = [
   checkNicknames.data.toJSON(),
   timesPanel.data.toJSON(),
   ticketPanel.data.toJSON(),
+  ticketCreate.data.toJSON(),
 ];
 
 const rest = new REST().setToken(process.env.DISCORD_TOKEN!);
