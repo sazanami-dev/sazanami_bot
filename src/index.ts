@@ -10,6 +10,7 @@ import * as times from './events/times';
 import * as ticket from './events/ticket';
 import * as guildMemberAdd from './events/guildMemberAdd';
 import * as approveMember from './events/approveMember';
+import { startAnnouncementCron } from './services/announcementCron';
 
 const commands = new Map([
   [checkNicknames.data.name, checkNicknames],
@@ -66,6 +67,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.once(Events.ClientReady, (c) => {
   console.log(`Logged in as ${c.user.tag}`);
+
+  // ポータルのお知らせ予約投稿を送信させる（起動時 + 1分ごと）
+  startAnnouncementCron();
 
   // 閉鎖から1週間経過したチケットを定期的に削除する（起動時 + 1時間ごと）
   ticket.sweepClosedTickets().catch(console.error);
