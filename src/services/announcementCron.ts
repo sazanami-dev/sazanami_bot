@@ -8,8 +8,12 @@
 /** 予約時刻からの遅延は呼び出し間隔がそのまま効くため、1 分ごとに叩く */
 const INTERVAL_MS = 60 * 1000
 
-/** ポータル側の処理が長引いても次の実行を待たせないよう、短めに打ち切る */
-const REQUEST_TIMEOUT_MS = 30 * 1000
+/**
+ * ポータル側は 1 回あたり 40 秒で処理を打ち切り、残りを次回に回す。
+ * それより短く打ち切ると「タイムアウトしたのに実際は送信済み」になるため、
+ * 余裕を持たせた値にする。
+ */
+const REQUEST_TIMEOUT_MS = 55 * 1000
 
 type CronSummary = {
   recovered: number
@@ -17,6 +21,8 @@ type CronSummary = {
   sent: number
   failed: number
   skipped: number
+  /** レート制限や時間切れで次回に回された件数 */
+  deferred: number
 }
 
 function endpoint(): string | null {
@@ -46,7 +52,7 @@ export async function runAnnouncementCron(): Promise<void> {
 
     const summary = (await res.json()) as CronSummary
     // 何も起きなかった実行はログを出さない（1 分ごとに動くため）
-    if (summary.sent > 0 || summary.failed > 0 || summary.recovered > 0) {
+    if (summary.sent > 0 || summary.failed > 0 || summary.recovered > 0 || summary.deferred > 0) {
       console.log('[announcementCron]', JSON.stringify(summary))
     }
   } catch (error) {
