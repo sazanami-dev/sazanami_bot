@@ -41,12 +41,39 @@ export async function runAnnouncementCron(): Promise<void> {
     const res = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${secret}` },
+      // 追従するとログインページの HTML を 200 で受け取ってしまうため追従しない
+      redirect: 'manual',
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
+
+    // 認証を通せていない、またはエンドポイントが無い場合、
+    // ポータル側の proxy が /signin へリダイレクトしてくる。
+    if (res.status >= 300 && res.status < 400) {
+      console.error(
+        '[announcementCron] リダイレクトされました。PORTAL_CRON_SECRET の不一致か、',
+        'ポータル側に cron エンドポイントが無い可能性があります:',
+        res.status,
+        res.headers.get('location') ?? ''
+      )
+      return
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       console.error('[announcementCron] failed:', res.status, detail.slice(0, 300))
+      return
+    }
+
+    // JSON 以外が返ったとき、パース例外ではなく中身が分かる形で残す
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json')) {
+      const detail = await res.text().catch(() => '')
+      console.error(
+        '[announcementCron] JSON 以外の応答:',
+        res.status,
+        contentType,
+        detail.slice(0, 200)
+      )
       return
     }
 
