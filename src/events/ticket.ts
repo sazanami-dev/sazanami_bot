@@ -175,9 +175,10 @@ export async function createTicketChannel(
       parseOwnerId(ch.topic) === userId
   );
   for (const ch of owned) {
-    const pinned = await ch.messages.fetchPinned().catch(() => null);
+    const pinned = await ch.messages.fetchPins().catch(() => null);
     const isOpen =
-      !pinned || ![...pinned.values()].some((m) => parseClosedAt(m) !== null);
+      !pinned ||
+      !pinned.items.some(({ message }) => parseClosedAt(message) !== null);
     if (isOpen) {
       return { status: 'exists', channel: ch };
     }
@@ -466,12 +467,12 @@ export async function sweepClosedTickets(): Promise<void> {
       if (parseOwnerId(ch.topic) === null) continue;
 
       // 閉鎖時刻はピン留めしたボタンメッセージの埋め込みに保存されている
-      const pinned = await ch.messages.fetchPinned().catch(() => null);
+      const pinned = await ch.messages.fetchPins().catch(() => null);
       if (!pinned) continue;
 
       let closedAt: number | null = null;
-      for (const msg of pinned.values()) {
-        const at = parseClosedAt(msg);
+      for (const { message } of pinned.items) {
+        const at = parseClosedAt(message);
         if (at !== null) {
           closedAt = at;
           break;
