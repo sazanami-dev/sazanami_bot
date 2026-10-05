@@ -1,0 +1,29 @@
+name: CI
+
+# PR のビルドチェック。デプロイはしない。
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同じ PR に続けて push された場合は古い実行を打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # GitHub ホストランナーで動かす。このリポジトリは public なので、
+    # PR トリガーをセルフホストランナーで動かすと fork のコードが
+    # デプロイ先サーバー上で実行されてしまう。
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build
+        # 本番と同じ Dockerfile でビルドが通ることだけを確認する（push はしない）
+        run: docker build -t bot-ci-build .
