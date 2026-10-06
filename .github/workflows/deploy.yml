@@ -51,7 +51,11 @@ jobs:
         env:
           APP_IMAGE: ${{ env.IMAGE }}
           APP_TAG: ${{ github.sha }}
+        # スラッシュコマンドは新しいイメージで起動する前に登録しておく。
+        # 認証情報はサーバー上の .env を使うため、GitHub の secrets は不要。
+        # 登録に失敗した場合は起動し直さずに止める。
         run: |
           docker compose pull
+          docker compose run --rm --no-deps bot node dist/deploy-commands.js
           docker compose up -d
           docker image prune -f
