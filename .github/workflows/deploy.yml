@@ -1,0 +1,61 @@
+name: Build and Deploy
+
+# main への push（PR マージ）をトリガーに自動ビルド・デプロイする
+on:
+  push:
+    branches: [main]
+  # 手動実行も可能にする（初回検証・再デプロイ用）
+  workflow_dispatch:
+
+# デプロイの多重実行を防ぐ（進行中はキャンセルせず順番待ち）
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  # イメージ名はこのワークフローが置かれているリポジトリから導出する
+  IMAGE: ghcr.io/${{ github.repository }}
+  # サーバー上のデプロイディレクトリ（docker-compose.yml と実行時 .env を配置済みの場所）
+  DEPLOY_DIR: /opt/sazanami-bot
+
+jobs:
+  deploy:
+    # ポータルと同じセルフホストランナーで実行する
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push image
+        # 型チェック（tsc）は Dockerfile のビルド段で行われ、失敗したらここで止まる
+        run: |
+          docker build \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:${{ github.sha }}" \
+            .
+          docker push "${IMAGE}:latest"
+          docker push "${IMAGE}:${{ github.sha }}"
+
+      - name: Deploy
+        working-directory: ${{ env.DEPLOY_DIR }}
+        # 起動するイメージを latest ではなく SHA で固定し、切り戻せるようにする。
+        # サーバー上で手動に切り戻す場合は
+        #   APP_IMAGE=<image> APP_TAG=<戻したい sha> docker compose up -d
+        env:
+          APP_IMAGE: ${{ env.IMAGE }}
+          APP_TAG: ${{ github.sha }}
+        # スラッシュコマンドは新しいイメージで起動する前に登録しておく。
+        # 認証情報はサーバー上の .env を使うため、GitHub の secrets は不要。
+        # 登録に失敗した場合は起動し直さずに止める。
+        run: |
+          docker compose pull
+          docker compose run --rm --no-deps bot node dist/deploy-commands.js
+          docker compose up -d
+          docker image prune -f

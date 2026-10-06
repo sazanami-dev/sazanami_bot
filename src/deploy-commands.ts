@@ -13,16 +13,23 @@ const commands = [
   ticketCreate.data.toJSON(),
 ];
 
-const rest = new REST().setToken(process.env.DISCORD_TOKEN!);
+const token = process.env.DISCORD_TOKEN;
+const clientId = process.env.DISCORD_CLIENT_ID;
+const guildId = process.env.DISCORD_GUILD_ID;
+
+if (!token || !clientId || !guildId) {
+  console.error('DISCORD_TOKEN / DISCORD_CLIENT_ID / DISCORD_GUILD_ID が未設定です');
+  process.exit(1);
+}
+
+const rest = new REST().setToken(token);
 
 (async () => {
   console.log('Registering slash commands...');
-  await rest.put(
-    Routes.applicationGuildCommands(
-      process.env.DISCORD_CLIENT_ID!,
-      process.env.DISCORD_GUILD_ID!
-    ),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
   console.log('Done.');
-})();
+})().catch((error) => {
+  // デプロイ時に失敗を検知できるよう、終了コードで知らせる
+  console.error('Failed to register slash commands:', error);
+  process.exit(1);
+});

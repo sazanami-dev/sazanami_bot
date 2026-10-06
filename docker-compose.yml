@@ -1,0 +1,18 @@
+# サーバー側（/opt/sazanami-bot）で使う構成。このファイルと .env を配置しておく。
+# APP_IMAGE / APP_TAG はデプロイ時にワークフローから渡される。
+services:
+  bot:
+    image: ${APP_IMAGE:-ghcr.io/sazanami-dev/sazanami_bot}:${APP_TAG:-latest}
+    restart: unless-stopped
+    # node を PID 1 にすると SIGTERM が無視され、停止のたびに 10 秒待って強制終了される
+    init: true
+    env_file: .env
+    # コンテナ内の localhost は bot 自身を指す。同じホストのポータル（:3000）へは
+    # .env で PORTAL_URL=http://host.docker.internal:3000 として届かせる
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
